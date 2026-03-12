@@ -25,7 +25,7 @@ class DinoSAMClipPipeline:
         self,
         device: str = "cuda",
         candidate_classes: Optional[List[str]] = None,
-        sam_checkpoint: str = "sam3.pth"
+        sam_checkpoint: str = ModelConfig.SAM_CHECKPOINT_PATH
     ):
         """
         Initialize the complete pipeline

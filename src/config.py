@@ -12,7 +12,7 @@ class ModelConfig:
 
     # SAM model settings
     SAM_MODEL_TYPE = "vit_h"  # vit_b, vit_l, vit_h
-    SAM_CHECKPOINT_PATH = f"{MODEL_SOURCES}/sam3"
+    SAM_CHECKPOINT_PATH = f"{MODEL_SOURCES}/sam3/sam3.pt"
     SAM_DEVICE = "cuda"  # or "cpu"
 
     # CLIP model settings

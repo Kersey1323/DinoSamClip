@@ -11,6 +11,8 @@ from typing import List, Tuple, Optional, Dict
 from segment_anything import sam_model_registry, SamPredictor
 from src.config import ModelConfig
 
+import os
+
 class SAMSegmenter:
     """
     SAM-based segmenter for generating object masks
@@ -34,12 +36,33 @@ class SAMSegmenter:
         self.model_type = model_type
 
         print(f"Loading SAM model: {model_type}")
-        try:
-            self.sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
-        except FileNotFoundError:
+        
+        # Initialize model structure first (without checkpoint)
+        self.sam = sam_model_registry[model_type](checkpoint=None)
+        
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            try:
+                print(f"Loading checkpoint from {checkpoint_path}")
+                # Load state dict
+                state_dict = torch.load(checkpoint_path, map_location=self.device)
+                
+                # Handle nested state dict (e.g. {'model': state_dict})
+                if isinstance(state_dict, dict) and "model" in state_dict:
+                    print("Extracting state dict from 'model' key...")
+                    state_dict = state_dict["model"]
+                
+                # Load weights with strict=False to ignore partial mismatches if necessary
+                # But typically we want strict=True. The error suggests a structure mismatch.
+                # Let's try loading it manually which is more robust than build_sam's loader
+                self.sam.load_state_dict(state_dict, strict=True)
+                print("SAM checkpoint loaded successfully")
+                
+            except Exception as e:
+                print(f"Warning: Failed to load SAM checkpoint: {e}")
+                print("Using SAM with random initialization")
+        else:
             print(f"Warning: SAM checkpoint not found at {checkpoint_path}")
             print("SAM will be loaded from default location or require manual download")
-            self.sam = sam_model_registry[model_type](checkpoint=None)
 
         self.sam.to(self.device)
         self.sam.eval()
