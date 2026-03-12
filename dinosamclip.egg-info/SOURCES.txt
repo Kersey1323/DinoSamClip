@@ -1,0 +1,13 @@
+setup.py
+dinosamclip.egg-info/PKG-INFO
+dinosamclip.egg-info/SOURCES.txt
+dinosamclip.egg-info/dependency_links.txt
+dinosamclip.egg-info/top_level.txt
+src/__init__.py
+src/config.py
+src/demo.py
+src/pipeline.py
+src/components/__init__.py
+src/components/clip_classifier.py
+src/components/dinov2_extractor.py
+src/components/sam_segmenter.py
