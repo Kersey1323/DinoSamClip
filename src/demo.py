@@ -1,6 +1,6 @@
 """
 Demo script for DinoV2 + SAM + CLIP Pipeline
-This script demonstrates how to use the complete pipeline
+This script demonstrates how to use the complete pipeline with glowing cutout visualization.
 """
 
 import argparse
@@ -8,272 +8,150 @@ import cv2
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
-import random
 import os
+import sys
+from PIL import ImageFilter
+# 确保可以导入 src 目录下的模块
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pipeline import DinoSAMClipPipeline
-from config import DEFAULT_CANDIDATE_CLASSES
+from src.pipeline import DinoSAMClipPipeline
+from src.config import DEFAULT_CANDIDATE_CLASSES
 
 
-def visualize_intermediate_states(
-    image: Image.Image, 
-    prompts: list, 
-    all_masks: list, 
-    save_path: str = "intermediate.png"
-):
+def create_glowing_cutout(
+    image: Image.Image,
+    mask: np.ndarray,
+    glow_color: tuple = (0, 150, 255), # 现在使用 RGB 颜色 (如: 浅蓝色)
+    thickness: int = 20,
+    blur_radius: int = 15
+) -> np.ndarray:
     """
-    可视化 SAM 的中间分割状态：绘制提示点和 Top N 个原始 Mask
+    使用 PIL 的 Alpha 通道混合技术，完美保护原图不被高光破坏
     """
-    if not all_masks:
-        print("没有有效的中间 Mask 可以可视化。")
-        return
-
-    img_array = np.array(image).copy()
-
-    # 1. 绘制 DinoV2 提取出的 Prompt 提示点
-    prompt_img = img_array.copy()
-    for x, y in prompts:
-        # 画绿色的中心点和白色的外圈，方便在图上看清
-        cv2.circle(prompt_img, (x, y), 4, (0, 255, 0), -1)
-        cv2.circle(prompt_img, (x, y), 6, (255, 255, 255), 2)
-
-    # 2. 准备画板 (最多展示前 4 个质量最高的 Mask，加上 Prompt 图)
-    num_masks = min(len(all_masks), 4)
-    fig, axes = plt.subplots(1, 1 + num_masks, figsize=(5 * (1 + num_masks), 5))
+    # 1. 转换蒙版为 0/255 的图像格式
+    mask_uint8 = (mask * 255).astype(np.uint8)
+    mask_img = Image.fromarray(mask_uint8).convert("L")
     
-    # 确保 axes 是一个列表方便遍历
-    if not isinstance(axes, np.ndarray):
-        axes = [axes]
-
-    # 画第一张图：提示点
-    axes[0].imshow(prompt_img)
-    axes[0].set_title(f"DinoV2 Prompts ({len(prompts)} points)")
-    axes[0].axis("off")
-
-    # 画后续的图：SAM 的中间 Mask
-    for i in range(num_masks):
-        mask_dict = all_masks[i]
-        mask = mask_dict["mask"]
-        score = mask_dict.get("score", 0.0)
-
-        # 创建一个红色半透明蒙版来显示 Mask 范围
-        overlay = img_array.copy()
-        color = np.array([255, 0, 0], dtype=np.uint8) # 红色
-        # 将 Mask 区域的像素替换为原图和红色的混合
-        overlay[mask] = overlay[mask] * 0.5 + color * 0.5
-
-        axes[i+1].imshow(overlay)
-        axes[i+1].set_title(f"Raw SAM Mask {i+1}\nQuality Score: {score:.3f}")
-        axes[i+1].axis("off")
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    # 2. 创建底板 (纯白色)
+    bg = Image.new("RGBA", image.size, (255, 255, 255, 255))
     
-    print(f"中间状态可视化已保存至: {save_path}")
-
-def visualize_results(
+    # 3. 创建发光层 (扩张蒙版 -> 高斯模糊)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (thickness, thickness))
+    dilated_mask = cv2.dilate(mask_uint8, kernel, iterations=1)
+    dilated_mask_img = Image.fromarray(dilated_mask).convert("L")
+    
+    # 生成带颜色的透明图层
+    glow_layer = Image.new("RGBA", image.size, glow_color + (255,))
+    blurred_alpha = dilated_mask_img.filter(ImageFilter.GaussianBlur(blur_radius))
+    glow_layer.putalpha(blurred_alpha) # 把模糊后的蒙版作为透明度
+    
+    # 4. 创建原图前景层 (仅保留蒙版内，其余完全透明)
+    fg_layer = image.convert("RGBA").copy()
+    fg_layer.putalpha(mask_img)
+    
+    # 5. 按顺序像汉堡一样叠加上去 (底板 -> 发光 -> 原图)
+    bg.paste(glow_layer, (0, 0), glow_layer)
+    bg.paste(fg_layer, (0, 0), fg_layer)
+    
+    return np.array(bg.convert("RGB"))
+def visualize_results_with_glow(
     image: Image.Image,
     detections: list,
     attention_map: np.ndarray = None,
-    save_path: str = "result.png"
+    save_path: str = "result_glow.png"
 ):
-    """
-    Visualize detection results
+    if not detections:
+        print("没有检测到物体，跳过可视化。")
+        return
 
-    Args:
-        image: Original PIL Image
-        detections: List of detection dictionaries
-        attention_map: Optional attention map from DinoV2
-        save_path: Path to save the visualization
-    """
-    # Convert to numpy
-    img_array = np.array(image).copy()
+    # 【关键修复】：按置信度从高到低排序，确保展示的是最确定的结果
+    detections.sort(key=lambda x: x["confidence"], reverse=True)
+    
+    top_detection = detections[0]
+    mask = top_detection["mask"]
+    class_name = top_detection["class"]
+    confidence = top_detection["confidence"]
 
-    # Define colors for different objects
-    colors = [
-        (255, 0, 0), (0, 255, 0), (0, 0, 255),
-        (255, 255, 0), (255, 0, 255), (0, 255, 255),
-        (128, 0, 0), (0, 128, 0), (0, 0, 128)
-    ]
+    # 生成特效图 (直接返回 RGB)
+    glowing_result_rgb = create_glowing_cutout(
+        image, mask,
+        glow_color=(30, 144, 255), # 道奇蓝
+        thickness=20, blur_radius=15
+    )
 
-    # Draw each detection
-    for i, det in enumerate(detections):
-        color = colors[i % len(colors)]
+    # 创建画布
+    fig, axes = plt.subplots(1, 3 if attention_map is not None else 2, figsize=(16, 6))
+    if not isinstance(axes, np.ndarray): axes = [axes]
 
-        # Draw bounding box
-        x1, y1, x2, y2 = det["bbox"]
-        cv2.rectangle(img_array, (x1, y1), (x2, y2), color, 2)
-
-        # Draw label
-        label = f"{det['class']}: {det['confidence']:.2%}"
-        cv2.putText(
-            img_array,
-            label,
-            (x1, y1 - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            2
-        )
-
-        # Overlay mask with transparency
-        mask = det["mask"]
-        overlay = img_array.copy()
-        overlay[mask] = color
-        img_array = cv2.addWeighted(img_array, 0.7, overlay, 0.3, 0)
-
-    # Create figure
-    fig, axes = plt.subplots(1, 3 if attention_map is not None else 2, figsize=(15, 5))
-
-    # Original image with detections
-    axes[0].imshow(img_array)
-    axes[0].set_title(f"Detected {len(detections)} Objects")
+    axes[0].imshow(glowing_result_rgb)
+    axes[0].set_title(f"Glowing Cutout: {class_name}")
     axes[0].axis("off")
 
-    # Attention map
     if attention_map is not None:
         im = axes[1].imshow(attention_map, cmap="jet")
-        axes[1].set_title("DinoV2 Attention Map")
+        axes[1].set_title("DinoV2 Heatmap")
         axes[1].axis("off")
-        plt.colorbar(im, ax=axes[1])
+        plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
 
-    # Detection summary
     ax = axes[-1]
     ax.axis("off")
-    summary_text = "Detection Results:\n\n"
-    for i, det in enumerate(detections):
-        summary_text += f"{i+1}. {det['class']}: {det['confidence']:.2%}\n"
-        if len(det["all_predictions"]) > 1:
-            summary_text += f"   Other: {det['all_predictions'][1]['class']} ({det['all_predictions'][1]['confidence']:.2%})\n"
-    ax.text(0.1, 0.5, summary_text, fontsize=12, verticalalignment="center")
+    summary_text = f"Top Object: {class_name}\nConfidence: {confidence:.2%}\n"
+    if len(top_detection["all_predictions"]) > 1:
+        second_place = top_detection["all_predictions"][1]
+        summary_text += f"\nRunner-up: {second_place['class']} ({second_place['confidence']:.2%})"
+    ax.text(0.1, 0.5, summary_text, fontsize=14, verticalalignment="center")
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
-
-    print(f"Results saved to {save_path}")
-
-
-def create_sample_image():
-    """
-    Create a sample test image with multiple objects
-    """
-    # Create a blank image
-    img = np.ones((480, 640, 3), dtype=np.uint8) * 240
-
-    # Draw some shapes to simulate objects
-    # Red circle (simulating apple)
-    cv2.circle(img, (150, 150), 50, (0, 0, 255), -1)
-
-    # Green rectangle (simulating book)
-    cv2.rectangle(img, (250, 100), (400, 200), (0, 200, 0), -1)
-
-    # Blue triangle (simulating something else)
-    pts = np.array([[450, 100], [550, 200], [350, 200]], np.int32)
-    cv2.fillPoly(img, [pts], (255, 0, 0))
-
-    # Yellow ellipse
-    cv2.ellipse(img, (200, 350), (60, 40), 0, 0, 360, (0, 255, 255), -1)
-
-    return Image.fromarray(img)
-
-
 def main():
-    """
-    Main demo function
-    """
-    parser = argparse.ArgumentParser(description="DinoV2 + SAM + CLIP Pipeline Demo")
-    parser.add_argument("--image", type=str, help="Path to input image")
-    parser.add_argument("--classes", type=str, nargs="+", help="Candidate classes")
+    parser = argparse.ArgumentParser(description="DinoV2 + SAM + CLIP Pipeline Demo with Glowing Cutout")
+    parser.add_argument("--image", type=str, required=True, help="Path to input image (Required)")
+    parser.add_argument("--classes", type=str, nargs="+", required=True, help="Candidate classes (e.g., dog cat person)")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
-    parser.add_argument("--sam_checkpoint", type=str, default="sam3.pth", help="SAM checkpoint path")
-    parser.add_argument("--output", type=str, default="result.png", help="Output path")
+    parser.add_argument("--output", type=str, default="result_glow.png", help="Output path")
     parser.add_argument("--auto", action="store_true", help="Use automatic mode (SAM + CLIP only)")
 
     args = parser.parse_args()
 
-    # Load or create image
-    if args.image and os.path.exists(args.image):
-        print(f"Loading image from: {args.image}")
-        image = Image.open(args.image).convert("RGB")
-    else:
-        print("Creating sample test image...")
-        image = create_sample_image()
-        if args.image:
-            image.save("test_input.png")
-            print("Saved test image to test_input.png")
+    # 加载图像
+    if not os.path.exists(args.image):
+        print(f"Error: Image path not found: {args.image}")
+        return
+    image = Image.open(args.image).convert("RGB")
+    print(f"已加载图像: {args.image}")
 
-    # Define candidate classes
-    candidate_classes = args.classes or [
-        "apple", "book", "triangle", "circle", "square",
-        "red object", "green object", "blue object", "yellow object",
-        "person", "car", "dog", "cat"
-    ]
-
-    print("\nCandidate classes:", candidate_classes)
-
-    # Initialize pipeline
-    print("\nInitializing pipeline...")
+    # 初始化管线
+    print("\n初始化管线...")
     pipeline = DinoSAMClipPipeline(
         device=args.device,
-        candidate_classes=candidate_classes,
-        sam_checkpoint=args.sam_checkpoint
+        candidate_classes=args.classes
     )
 
-    # Run detection
-    print("\nRunning detection and classification...")
-
+    # 运行推理
+    print("\n开始推理 (DinoV2 -> SAM -> CLIP)...")
     if args.auto:
-        # Automatic mode (SAM + CLIP only, no DinoV2)
-        results = pipeline.detect_and_classify_automatic(
-            image,
-            candidate_classes=candidate_classes,
-            num_points=64,
-            min_mask_area=1000,
-            confidence_threshold=0.1
-        )
+        results = pipeline.detect_and_classify_automatic(image, confidence_threshold=0.1)
     else:
-        # Full pipeline (DinoV2 + SAM + CLIP)
-        results = pipeline.detect_and_classify(
-            image,
-            candidate_classes=candidate_classes,
-            use_dinov2_prompts=True,
-            num_prompts=10,
-            attention_threshold=0.4,
-            min_mask_area=1000,
-            confidence_threshold=0.1
-        )
-    
-    # 【新增这里】：可视化中间状态
-    print("\nVisualizing intermediate SAM masks...")
-    # 把中间结果图的名称加一个 _intermediate 后缀
-    inter_path = args.output.replace(".png", "_intermediate.png") 
-    visualize_intermediate_states(
-        image,
-        prompts=results.get("prompts", []),
-        all_masks=results.get("all_masks", []),
-        save_path=inter_path
-    )
-    
-    # Visualize results
-    print("\nVisualizing results...")
-    visualize_results(
+        results = pipeline.detect_and_classify(image, num_prompts=10, confidence_threshold=0.1)
+
+    # 可视化结果 (使用新的发光特效函数)
+    print("\n生成发光特效图...")
+    visualize_results_with_glow(
         image,
         results["detections"],
         attention_map=results.get("attention_map"),
         save_path=args.output
     )
 
-    # Print summary
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    print(f"Total objects detected: {results['num_objects']}")
-    for i, det in enumerate(results["detections"]):
-        print(f"  {i+1}. {det['class']}: {det['confidence']:.2%}")
-    print("=" * 60)
-
+    # 打印简要信息
+    print("\n" + "="*40)
+    print(f"检测到 {results['num_objects']} 个物体。")
+    if results['num_objects'] > 0:
+        top = results['detections'][0]
+        print(f"置信度最高: {top['class']} ({top['confidence']:.2%})")
+        print("详细可视化结果请查看生成的图片。")
+    print("="*40)
 
 if __name__ == "__main__":
     main()

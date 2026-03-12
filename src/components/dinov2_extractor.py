@@ -40,50 +40,38 @@ class DinoV2Extractor:
 
     def extract_attention_map(self, image: Image.Image, target_size: Optional[Tuple[int, int]] = None) -> np.ndarray:
         """
-        Extract attention map from DinoV2
-
-        Args:
-            image: PIL Image
-            target_size: Target size for the attention map (width, height)
-
-        Returns:
-            Attention map as numpy array
+        使用 CLS token 与空间 Patch 的余弦相似度，生成更稳定、覆盖更全的热力图
         """
+        import cv2
         inputs = self.processor(images=image, return_tensors="pt")
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        # 【关键修复 2】：动态获取真实的 Tensor 尺寸，适配任意长宽比图像
         actual_h = inputs['pixel_values'].shape[2]
         actual_w = inputs['pixel_values'].shape[3]
-        
         patch_size = 14
-        h = actual_h // patch_size
-        w = actual_w // patch_size
-        num_spatial_patches = h * w
+        h, w = actual_h // patch_size, actual_w // patch_size
 
-        # 推理，提取特征和注意力
         with torch.no_grad():
-            outputs = self.model(**inputs, output_attentions=True)
+            outputs = self.model(**inputs)
             
-        # 提取最后一层的注意力 [batch_size, num_heads, seq_len, seq_len]
-        attentions = outputs.attentions[-1]
+        # 提取最后一层的特征矩阵
+        hidden_states = outputs.last_hidden_state[0]
+        
+        # CLS 是全局特征，Patch 是局部特征
+        cls_token = hidden_states[0]
+        patch_tokens = hidden_states[1:1 + h * w]
 
-        # 提取 CLS token 对空间 Patch 的注意力并求各 Head 均值
-        cls_attention = attentions[0, :, 0, 1:1 + num_spatial_patches].mean(0)
+        # 归一化后进行点乘运算 (即计算余弦相似度)
+        cls_token = torch.nn.functional.normalize(cls_token, dim=0)
+        patch_tokens = torch.nn.functional.normalize(patch_tokens, dim=-1)
+        similarity = (patch_tokens @ cls_token).cpu().numpy()
 
-        # 安全 Reshape
-        attention_map = cls_attention.reshape(h, w).cpu().numpy()
-
-        # 归一化到 [0, 1]
+        # 变形并归一化到 0-1 之间
+        attention_map = similarity.reshape(h, w)
         attention_map = (attention_map - attention_map.min()) / (attention_map.max() - attention_map.min() + 1e-8)
 
-        # 放大到目标图像尺寸
         if target_size is not None:
-            attention_map = cv2.resize(
-                attention_map,
-                target_size, # (width, height)
-                interpolation=cv2.INTER_LINEAR
-            )
+            attention_map = cv2.resize(attention_map, target_size, interpolation=cv2.INTER_LINEAR)
 
         return attention_map
 
