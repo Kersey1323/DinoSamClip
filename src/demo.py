@@ -1,6 +1,6 @@
 """
 Demo script for DinoV2 + SAM + CLIP Pipeline
-Visualization Style: Overlay segmentation mask and outline on the ORIGINAL image.
+Visualization Style: Overlay segmentation mask, outline, and class labels with confidence on the ORIGINAL image.
 """
 
 import argparse
@@ -12,90 +12,113 @@ import os
 import sys
 import random
 
-# 添加项目根目录到 sys.path，确保优先导入本地 src 模块
+# Add project root to sys.path to ensure local src modules are imported first
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src_dir = os.path.join(project_root, "src")
-
-# 将路径插入到 sys.path 的最前面 (index 0)，强制使用本地代码而不是 site-packages
+output_dir = "./results"
+# Insert paths at the beginning of sys.path to prioritize local code
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# 打印路径确认 (调试用)
+# Print paths for confirmation (debugging)
 print(f"Project root added to sys.path: {project_root}")
 print(f"Src dir added to sys.path: {src_dir}")
 
 from src.pipeline import DinoSAMClipPipeline
 from src.config import DEFAULT_CANDIDATE_CLASSES, ModelConfig
 
-# 定义一些鲜艳的颜色用于不同物体的分割显示 (RGB格式)
+# Define distinct colors for segmentation visualization (RGB format)
 COLORS = [
-    (255, 0, 0),   # 红
-    (0, 255, 0),   # 绿
-    (0, 100, 255), # 蓝
-    (255, 255, 0), # 黄
-    (255, 0, 255), # 品红
-    (0, 255, 255), # 青
-    (255, 128, 0)  # 橙
+    (255, 0, 0),   # Red
+    (0, 255, 0),   # Green
+    (0, 100, 255), # Blue
+    (255, 255, 0), # Yellow
+    (255, 0, 255), # Magenta
+    (0, 255, 255), # Cyan
+    (255, 128, 0)  # Orange
 ]
 
 def create_overlay_on_original(image_array: np.ndarray, detections: list, alpha: float = 0.5) -> np.ndarray:
     """
-    核心可视化函数：在原图上叠加半透明 Mask 和轮廓描边。
-    如果有多条检测结果，会使用不同颜色区分。
+    Core visualization function: Overlays semi-transparent masks, solid outlines, and text labels on the original image.
+    Uses different colors for different detections.
     """
-    # 复制一份原图用于绘制
+    # Copy the original image for drawing
     output_img = image_array.copy()
     
-    # 创建一个用于叠加颜色的图层
+    # Create a layer for color overlay
     overlay_layer = image_array.copy()
 
-    # 1. 绘制半透明色块填充
+    # 1. Draw semi-transparent filled masks
     shapes_drawn = False
     for i, det in enumerate(detections):
         mask = det["mask"]
-        # 循环选择颜色
+        # Cycle through colors
         color = COLORS[i % len(COLORS)]
         
-        # 在 Mask 区域填充纯色
-        # 注意：OpenCV 处理图像时通常是 BGR 顺序，但 matplotlib 显示需要 RGB。
-        # 这里我们将输入视为 RGB (因为我们在 main 里 convert('RGB') 了)，所以直接用 RGB 颜色。
+        # Fill the mask region with solid color
+        # Note: matplotlib displays RGB, and input image_array is RGB, so we use RGB color directly.
         overlay_layer[mask] = np.array(color, dtype=np.uint8)
         shapes_drawn = True
 
-    # 将半透明颜色层与原图混合
+    # Blend the overlay layer with the original image
     if shapes_drawn:
         cv2.addWeighted(overlay_layer, alpha, output_img, 1 - alpha, 0, output_img)
 
-    # 2. 绘制实线轮廓描边 (为了清晰，画在混合图层之上)
+    # 2. Draw solid outlines and text labels (drawn on top of the blended image for clarity)
     for i, det in enumerate(detections):
         mask = det["mask"]
         color = COLORS[i % len(COLORS)]
         
         mask_uint8 = (mask * 255).astype(np.uint8)
-        # 寻找轮廓
+        # Find contours
         contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        # 绘制轮廓，线宽为 2
+        # Draw contours with thickness 2
         cv2.drawContours(output_img, contours, -1, color, thickness=2)
+
+        # --- Add Text Label with Background Box ---
+        # Find the largest contour to place the label near its top-left corner
+        if contours:
+            # Find the bounding box of the largest contour
+            c = max(contours, key=cv2.contourArea)
+            x, y, w, h = cv2.boundingRect(c)
+            
+            # Prepare label text
+            label_text = f"{i+1}. {det['class']} ({det['confidence']:.1%})"
+            
+            # Calculate text size to draw background box
+            (text_w, text_h), baseline = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            
+            # Draw filled rectangle for text background (using the same color as the mask)
+            cv2.rectangle(output_img, (x, y - text_h - baseline - 5), (x + text_w, y), color, -1)
+            
+            # Draw white text on top of the background box
+            # Determine text color based on background brightness for readability
+            text_color = (255, 255, 255) # Default white
+            if (color[0]*0.299 + color[1]*0.587 + color[2]*0.114) > 150: # If background is bright
+                text_color = (0, 0, 0) # Use black text
+
+            cv2.putText(output_img, label_text, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2, cv2.LINE_AA)
 
     return output_img
 
 def visualize_intermediate_states(image: Image.Image, prompts: list, all_masks: list, save_path: str):
-    """可视化中间状态：DinoV2 提示点 和 SAM 原始 Mask"""
+    """Visualizes intermediate states: DinoV2 prompts and raw SAM masks."""
     if not prompts and not all_masks:
-        print("没有中间状态数据可显示。")
+        print("No intermediate state data to display.")
         return
         
     img_array = np.array(image).copy()
 
-    # 1. 绘制 DinoV2 提示点 (绿点白圈)
+    # 1. Draw DinoV2 prompts (green points with white outline)
     prompt_img = img_array.copy()
     for x, y in prompts:
         cv2.circle(prompt_img, (x, y), 4, (0, 255, 0), -1)
         cv2.circle(prompt_img, (x, y), 6, (255, 255, 255), 2)
 
-    # 2. 准备画布：展示提示点图 + 最多前 3 个原始 Mask
+    # 2. Prepare canvas: Show prompt image + up to top 3 raw SAM masks
     num_masks = min(len(all_masks), 3)
     fig, axes = plt.subplots(1, 1 + num_masks, figsize=(5 * (1 + num_masks), 5))
     if not isinstance(axes, np.ndarray): axes = [axes]
@@ -104,15 +127,15 @@ def visualize_intermediate_states(image: Image.Image, prompts: list, all_masks: 
     axes[0].set_title(f"DinoV2 Prompts ({len(prompts)})")
     axes[0].axis("off")
 
-    # 3. 绘制 SAM 原始 Mask (用单一红色叠加显示)
+    # 3. Draw SAM raw masks (overlayed in single red color)
     for i in range(num_masks):
         mask_dict = all_masks[i]
         mask = mask_dict["mask"]
-        score = mask_dict.get("iou_score", mask_dict.get("score", 0.0)) # 兼容不同的 key
+        score = mask_dict.get("iou_score", mask_dict.get("score", 0.0)) # Compatibility for different keys
 
         overlay = img_array.copy()
         red_color = np.array([255, 0, 0], dtype=np.uint8)
-        # 简单的半透明叠加
+        # Simple semi-transparent overlay
         overlay[mask] = (overlay[mask] * 0.5 + red_color * 0.5).astype(np.uint8)
         
         axes[i+1].imshow(overlay)
@@ -122,37 +145,37 @@ def visualize_intermediate_states(image: Image.Image, prompts: list, all_masks: 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"🔍 中间状态分析图已保存至: {save_path}")
+    print(f"🔍 Intermediate state analysis image saved to: {save_path}")
 
 def visualize_final_results(image: Image.Image, detections: list, attention_map: np.ndarray, save_path: str):
-    """最终结果可视化：原图叠加分割 + 热力图 + 文本摘要"""
+    """Final result visualization: Original image with segmentation overlay + heatmap + text summary."""
     if not detections:
-        print("没有检测到物体，无法生成最终结果图。")
+        print("No objects detected, cannot generate final result image.")
         return
 
     img_array = np.array(image)
 
-    # --- 生成核心叠加叠加图 ---
-    # 这里我们传入所有检测结果，create_overlay_on_original 会处理多颜色叠加
+    # --- Generate core overlay image ---
+    # Pass all detections, create_overlay_on_original handles multi-color overlay and labeling
     final_overlay_rgb = create_overlay_on_original(img_array, detections, alpha=0.4)
 
-    # --- 创建画布 ---
+    # --- Create canvas ---
     fig, axes = plt.subplots(1, 3 if attention_map is not None else 2, figsize=(16, 6))
     if not isinstance(axes, np.ndarray): axes = [axes]
 
-    # 子图 1: 最终分割叠加结果
+    # Subplot 1: Final segmentation overlay result
     axes[0].imshow(final_overlay_rgb)
     axes[0].set_title(f"Final Segmentation Overlay")
     axes[0].axis("off")
 
-    # 子图 2: DinoV2 热力图
+    # Subplot 2: DinoV2 heatmap
     if attention_map is not None:
         im = axes[1].imshow(attention_map, cmap="jet")
         axes[1].set_title("DinoV2 Similarity Heatmap")
         axes[1].axis("off")
         plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
 
-    # 子图 3: 文本摘要 (列出所有检测到的物体)
+    # Subplot 3: Text summary (list all detected objects)
     ax = axes[-1]
     ax.axis("off")
     summary_text = "Detection Summary:\n\n"
@@ -164,28 +187,28 @@ def visualize_final_results(image: Image.Image, detections: list, attention_map:
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"✨ 最终结果图已保存至: {save_path}")
+    print(f"✨ Final result image saved to: {save_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="DinoV2 + SAM + CLIP Pipeline Demo")
     parser.add_argument("--image", type=str, required=True, help="Path to input image")
     parser.add_argument("--classes", type=str, nargs="+", required=True, help="Candidate classes (English)")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
-    parser.add_argument("--output", type=str, default="result_final.png", help="Output path for final result")
-    # 增加若干参数用于调节Pipeline行为
+    parser.add_argument("--output", type=str, default=f"{output_dir}/result_final.png", help="Output path for final result")
+    # Add parameters to adjust Pipeline behavior
     parser.add_argument("--num_prompts", type=int, default=10, help="Max number of prompts from DinoV2")
     parser.add_argument("--conf_thresh", type=float, default=0.15, help="CLIP confidence threshold to keep detection")
     parser.add_argument("--sam_checkpoint", type=str, default=ModelConfig.SAM_CHECKPOINT_PATH, help="Path to SAM checkpoint")
     
     args = parser.parse_args()
 
-    # 加载图像
+    # Load image
     if not os.path.exists(args.image):
         print(f"Error: Image {args.image} not found.")
         return
     image = Image.open(args.image).convert("RGB")
 
-    # 初始化管道
+    # Initialize pipeline
     pipeline = DinoSAMClipPipeline(
         device=args.device,
         candidate_classes=args.classes,
@@ -193,25 +216,25 @@ def main():
     )
 
     print("\n[Running Pipeline...]")
-    # 运行检测，传入命令行参数
+    # Run detection, pass command line arguments
     results = pipeline.detect_and_classify(
         image, 
         num_prompts=args.num_prompts,
         confidence_threshold=args.conf_thresh
     )
 
-    print(f"检测完成，共找到 {results['num_objects']} 个目标。")
+    print(f"Detection complete, found {results['num_objects']} targets.")
 
-# 1. 保存中间状态图 (DinoV2点 和 SAM原始Mask)
+    # 1. Save intermediate state image (DinoV2 points and SAM raw masks)
     inter_path = args.output.replace(".png", "_intermediate.png")
     visualize_intermediate_states(
         image, 
-        prompts=results.get("prompts", []),     # <--- 加上 , [] 防御 None
-        all_masks=results.get("all_masks", []), # <--- 加上 , [] 防御 None
-        save_path=inter_path
+        prompts=results.get("prompts", []),     # <--- Add , [] to defend against None
+        all_masks=results.get("all_masks", []), # <--- Add , [] to defend against None
+        save_path=  inter_path
     )
 
-    # 2. 保存最终结果图 (原图叠加风格)
+    # 2. Save final result image (original image overlay style with labels)
     visualize_final_results(
         image, 
         detections=results["detections"], 

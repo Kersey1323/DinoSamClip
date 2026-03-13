@@ -15,6 +15,7 @@ from components.sam_segmenter import SAMSegmenter
 from components.clip_classifier import CLIPClassifier
 from config import PipelineConfig, DEFAULT_CANDIDATE_CLASSES, ModelConfig
 
+OUTPUT_DIR = "./results"
 
 class DinoSAMClipPipeline:
     """
@@ -29,11 +30,6 @@ class DinoSAMClipPipeline:
     ):
         """
         Initialize the complete pipeline
-
-        Args:
-            device: Device to run all models on
-            candidate_classes: List of candidate class names for CLIP
-            sam_checkpoint: Path to SAM checkpoint file
         """
         self.device = device if torch.cuda.is_available() else "cpu"
         self.config = PipelineConfig()
@@ -70,34 +66,17 @@ class DinoSAMClipPipeline:
         attention_threshold: float = 0.5,
         min_mask_area: int = 1000,
         confidence_threshold: float = 0.2
-        
     ) -> Dict:
         """
         Main detection and classification method
-
-        Args:
-            image: Input PIL Image
-            candidate_classes: Optional list of candidate classes (overrides default)
-            use_dinov2_prompts: Whether to use DinoV2 attention for prompting SAM
-            num_prompts: Number of prompts to generate from DinoV2
-            attention_threshold: Threshold for DinoV2 attention peaks
-            min_mask_area: Minimum area for valid masks
-            confidence_threshold: Minimum confidence for classification
-
-        Returns:
-            Dictionary containing detection results
         """
-        # Use provided classes or default
         classes = candidate_classes or self.candidate_classes
-
-        # Convert image to numpy for processing
         image_array = np.array(image)
 
         print("\n" + "=" * 60)
         print("Step 1: Extracting DinoV2 attention maps...")
         print("=" * 60)
 
-        # Step 1: DinoV2 extracts attention map
         attention_map = self.dinov2.extract_attention_map(
             image,
             target_size=(image.width, image.height)
@@ -107,8 +86,10 @@ class DinoSAMClipPipeline:
         print("\n" + "=" * 60)
         print("Step 2: Generating prompts for SAM...")
         print("=" * 60)
-
-        # Step 2: Generate prompts from attention map
+        
+        # 提前定义 prompts 变量，防止作用域问题
+        prompts = []
+        
         if use_dinov2_prompts:
             prompts = self.dinov2.generate_prompts_from_attention(
                 attention_map,
@@ -117,7 +98,6 @@ class DinoSAMClipPipeline:
             )
             print(f"Generated {len(prompts)} prompts from DinoV2 attention")
         else:
-            # Use grid prompts as fallback
             prompts = self.sam.generate_grid_prompts(
                 image_array.shape[:2],
                 grid_size=8
@@ -132,52 +112,55 @@ class DinoSAMClipPipeline:
         print("Step 3: Segmenting objects with SAM...")
         print("=" * 60)
 
-        # Step 3: SAM generates segmentation masks
         self.sam.set_image(image_array)
 
-        # Segment from prompts
         all_masks = []
         for point in prompts:
             results = self.sam.segment_from_points([point], multimask_output=False)
             all_masks.extend(results)
 
-        # Filter overlapping masks
         valid_masks = self.sam.filter_overlapping_masks(
             all_masks,
             iou_threshold=0.7
         )
 
-        # Filter by minimum area
         valid_masks = [m for m in valid_masks if np.sum(m["mask"]) >= min_mask_area]
 
         print(f"Found {len(valid_masks)} valid masks")
+        
+        # 可视化排错
+        if len(valid_masks) > 0:
+            self.sam.visualize_prediction(
+                image=image_array,
+                masks=valid_masks,
+                points=prompts,
+                title="Pipeline Debug: SAM Valid Masks",
+                save_path=f"{OUTPUT_DIR}/debug_pipeline_sam.png" 
+            )
 
+        # 失败提前退出时，也要保证字典结构完整！
         if len(valid_masks) == 0:
             print("No objects detected!")
             return {
                 "image": image,
+                "attention_map": attention_map,
+                "prompts": prompts,
                 "detections": [],
-                "num_objects": 0
+                "num_objects": 0,
+                "all_masks": []
             }
 
         print("\n" + "=" * 60)
         print("Step 4: Classifying objects with CLIP...")
         print("=" * 60)
 
-        # Step 4: CLIP classifies each mask
         cropped_images = []
         mask_data = []
 
         for i, mask_dict in enumerate(valid_masks):
             mask = mask_dict["mask"]
-
-            # Crop masked region
             cropped, bbox = self.sam.crop_masked_region(image_array, mask, padding=10)
-
-            # Apply mask to cropped region
             cropped_masked = self.sam.apply_mask_to_image(cropped, mask[bbox[1]:bbox[3], bbox[0]:bbox[2]])
-
-            # Resize to CLIP input size
             cropped_resized = cv2.resize(cropped_masked, (224, 224))
 
             cropped_images.append(cropped_resized)
@@ -187,13 +170,10 @@ class DinoSAMClipPipeline:
                 "score": mask_dict["score"]
             })
 
-        # Classify all crops
         clip_results = self.clip.classify_masks(cropped_images, classes)
 
-        # Combine results
         detections = []
         for i, (mask_info, clip_result) in enumerate(zip(mask_data, clip_results)):
-            # Filter by confidence threshold
             if clip_result["top_confidence"] >= confidence_threshold:
                 detections.append({
                     "class": clip_result["top_class"],
@@ -204,14 +184,14 @@ class DinoSAMClipPipeline:
                 })
 
         print(f"\nClassified {len(detections)} objects")
-
-        # Print results
         for i, det in enumerate(detections):
             print(f"  Object {i+1}: {det['class']} ({det['confidence']:.2%})")
 
+        # 完美标准的返回字典
         return {
             "image": image,
             "attention_map": attention_map,
+            "prompts": prompts,              # <--- 这里传入第 102 行定义的 prompts
             "detections": detections,
             "num_objects": len(detections),
             "all_masks": valid_masks
@@ -227,16 +207,6 @@ class DinoSAMClipPipeline:
     ) -> Dict:
         """
         Automatic detection using SAM grid prompts (no DinoV2)
-
-        Args:
-            image: Input PIL Image
-            candidate_classes: Optional list of candidate classes
-            num_points: Number of grid points for SAM
-            min_mask_area: Minimum area for valid masks
-            confidence_threshold: Minimum confidence for classification
-
-        Returns:
-            Dictionary containing detection results
         """
         classes = candidate_classes or self.candidate_classes
         image_array = np.array(image)
@@ -245,7 +215,6 @@ class DinoSAMClipPipeline:
         print("Running automatic detection (SAM + CLIP)...")
         print("=" * 60)
 
-        # Direct SAM segmentation
         valid_masks = self.sam.segment_automatic(
             image_array,
             num_points=num_points,
@@ -254,14 +223,17 @@ class DinoSAMClipPipeline:
 
         print(f"Found {len(valid_masks)} valid masks")
 
+        # 失败提前退出时，同样保证字典结构完整！
         if len(valid_masks) == 0:
             return {
                 "image": image,
+                "attention_map": None,       # 自动模式没有热力图，传 None
+                "prompts": [],               # 自动模式没有手动点，传空列表 []
                 "detections": [],
-                "num_objects": 0
+                "num_objects": 0,
+                "all_masks": []
             }
 
-        # Classify with CLIP
         cropped_images = []
         mask_data = []
 
@@ -280,7 +252,6 @@ class DinoSAMClipPipeline:
 
         clip_results = self.clip.classify_masks(cropped_images, classes)
 
-        # Combine results
         detections = []
         for mask_info, clip_result in zip(mask_data, clip_results):
             if clip_result["top_confidence"] >= confidence_threshold:
@@ -292,11 +263,12 @@ class DinoSAMClipPipeline:
                     "all_predictions": clip_result["predictions"]
                 })
 
+        # 完美标准的返回字典 (与上面完全一致)
         return {
             "image": image,
-            # "attention_map": attention_map,
-            # "prompts": prompts,           # <--- 【新增这一行】把生成的提示点传出来
+            "attention_map": None,           # <--- 自动模式没有热力图，传 None
+            "prompts": [],                   # <--- 自动模式没有手动点，传空列表 []
             "detections": detections,
             "num_objects": len(detections),
-            "all_masks": valid_masks      # 原本就有，这是 SAM 输出的全部原始 Mask
+            "all_masks": valid_masks
         }

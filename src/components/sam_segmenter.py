@@ -10,6 +10,7 @@ import cv2
 from typing import List, Tuple, Optional, Dict
 from segment_anything import sam_model_registry, SamPredictor
 from src.config import ModelConfig
+import matplotlib.pyplot as plt
 
 import os
 
@@ -342,3 +343,104 @@ class SAMSegmenter:
         bbox = (x_min, y_min, x_max, y_max)
 
         return cropped, bbox
+
+    
+    # ==========================================================
+    # 官方风格可视化工具库 (Official Visualization Utils)
+    # ==========================================================
+    @staticmethod
+    def show_mask(mask: np.ndarray, ax, random_color: bool = False):
+        """在图表轴上叠加绘制官方科技蓝(或随机颜色)的半透明 Mask"""
+        if random_color:
+            color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
+        else:
+            color = np.array([30/255, 144/255, 255/255, 0.6])
+        h, w = mask.shape[-2:]
+        mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+        ax.imshow(mask_image)
+
+    @staticmethod
+    def show_points(coords: list, labels: list, ax, marker_size: int = 375):
+        """在图表轴上绘制绿色(正样本)或红色(负样本)的提示点"""
+        if not coords or not labels:
+            return
+        coords_np = np.array(coords)
+        labels_np = np.array(labels)
+        pos_points = coords_np[labels_np == 1]
+        neg_points = coords_np[labels_np == 0]
+        if len(pos_points) > 0:
+            ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', 
+                       s=marker_size, edgecolor='white', linewidth=1.25)
+        if len(neg_points) > 0:
+            ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', 
+                       s=marker_size, edgecolor='white', linewidth=1.25)
+
+    @staticmethod
+    def show_box(box: tuple, ax):
+        """在图表轴上绘制绿色的边界框"""
+        if box is None:
+            return
+        x0, y0 = box[0], box[1]
+        w, h = box[2] - box[0], box[3] - box[1]
+        ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))
+
+    def visualize_prediction(
+        self, 
+        image: np.ndarray, 
+        masks: list, 
+        points: list = None, 
+        labels: list = None, 
+        box: tuple = None, 
+        title: str = "SAM Segmentation", 
+        save_path: str = None
+    ) -> np.ndarray:
+        """
+        集成可视化方法：一键生成包含原图、Mask、点和框的官方风格结果图。
+        
+        Args:
+            image: 原始 RGB 图像数组
+            masks: 掩码字典列表 (如 segment_from_points 返回的格式)
+            points: 提示点列表 [(x1, y1), (x2, y2), ...]
+            labels: 标签列表 [1, 1, 0, ...] (1为前景，0为背景)
+            box: 边界框元组 (x1, y1, x2, y2)
+            title: 图表标题
+            save_path: 可选的保存路径
+            
+        Returns:
+            np.ndarray: 生成的可视化结果的 RGB 图像数组
+        """
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        ax.imshow(image)
+
+        # 1. 绘制掩码 (如果传入了多个 mask，则使用随机颜色区分)
+        use_random_color = len(masks) > 1
+        for mask_dict in masks:
+            mask = mask_dict["mask"]
+            self.show_mask(mask, ax, random_color=use_random_color)
+
+        # 2. 绘制提示点
+        if points is not None:
+            if labels is None:
+                labels = [1] * len(points)  # 默认全是前景点
+            self.show_points(points, labels, ax)
+
+        # 3. 绘制边界框
+        if box is not None:
+            self.show_box(box, ax)
+
+        ax.set_title(title, fontsize=16)
+        ax.axis('off')
+
+        # 4. 如果提供了路径，则保存到文件
+        if save_path:
+            plt.tight_layout()
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+            print(f"SAM 独立可视化图已保存至: {save_path}")
+
+        # 5. 将 matplotlib 的图表转换为 numpy 数组返回，方便在内存中流转
+        fig.canvas.draw()
+        img_result = np.asarray(fig.canvas.buffer_rgba())[:, :, :3]
+        img_result = img_result.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        plt.close(fig)
+        
+        return img_result

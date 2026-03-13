@@ -12,7 +12,7 @@ class ModelConfig:
 
     # SAM model settings
     SAM_MODEL_TYPE = "vit_h"  # vit_b, vit_l, vit_h
-    SAM_CHECKPOINT_PATH = f"{MODEL_SOURCES}/sam3/sam3.pt"
+    SAM_CHECKPOINT_PATH = f"{MODEL_SOURCES}/sam_1/sam_vit_h_4b8939.pth"
     SAM_DEVICE = "cuda"  # or "cpu"
 
     # CLIP model settings
@@ -25,10 +25,11 @@ class PipelineConfig:
     SAM_MODEL_TYPE = "vit_h"  # vit_b, vit_l, vit_h
     
     # Attention threshold for DinoV2 prompt generation
-    ATTENTION_THRESHOLD = 0.5
+    # Lowered from 0.5 to 0.15 to ensure prompts are generated even for subtle objects
+    ATTENTION_THRESHOLD = 0.15
 
     # Minimum area for valid mask (in pixels)
-    MIN_MASK_AREA = 1000
+    MIN_MASK_AREA = 500
 
     # Number of points to generate from attention map
     NUM_PROMPTS = 10
