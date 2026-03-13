@@ -15,7 +15,7 @@ import random
 # Add project root to sys.path to ensure local src modules are imported first
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src_dir = os.path.join(project_root, "src")
-output_dir = "./results"
+output_dir = os.path.join(src_dir, "results")
 # Insert paths at the beginning of sys.path to prioritize local code
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
@@ -205,6 +205,18 @@ def main():
     
   
         
+    import time
+
+    # Generate timestamp for the output directory
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    timestamp_dir = os.path.join(output_dir, timestamp)
+    os.makedirs(timestamp_dir, exist_ok=True)
+    print(f"Created output directory: {timestamp_dir}")
+
+    # Update output path to use the timestamped directory
+    base_filename = os.path.basename(args.output)
+    final_output_path = os.path.join(timestamp_dir, base_filename)
+    
     # Load image
     if not os.path.exists(args.image):
         print(f"Error: Image {args.image} not found.")
@@ -230,17 +242,18 @@ def main():
             results = pipeline.detect_and_classify(
                 image, 
                 num_prompts=args.num_prompts,
-                confidence_threshold=args.conf_thresh
+                confidence_threshold=args.conf_thresh,
+                output_dir=timestamp_dir
             )
     print(f"Detection complete, found {results['num_objects']} targets.")
 
     # 1. Save intermediate state image (DinoV2 points and SAM raw masks)
-    inter_path = args.output.replace(".png", "_intermediate.png")
+    inter_path = final_output_path.replace(".png", "_intermediate.png")
     visualize_intermediate_states(
         image, 
         prompts=results.get("prompts", []),     # <--- Add , [] to defend against None
         all_masks=results.get("all_masks", []), # <--- Add , [] to defend against None
-        save_path=  inter_path
+        save_path=inter_path
     )
 
     # 2. Save final result image (original image overlay style with labels)
@@ -248,7 +261,7 @@ def main():
         image, 
         detections=results["detections"], 
         attention_map=results.get("attention_map"), 
-        save_path=args.output
+        save_path=final_output_path
     )
 
 if __name__ == "__main__":

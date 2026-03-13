@@ -1,0 +1,4 @@
+finetuning_models/*
+/dinov2_finetuning/data/*
+/src/data/*
+/voc_result/*

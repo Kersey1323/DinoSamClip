@@ -15,7 +15,10 @@ from components.sam_segmenter import SAMSegmenter
 from components.clip_classifier import CLIPClassifier
 from config import PipelineConfig, DEFAULT_CANDIDATE_CLASSES, ModelConfig
 
-OUTPUT_DIR = "./results"
+import os
+
+# Set default output directory to src/results relative to this file
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
 
 class DinoSAMClipPipeline:
     """
@@ -65,10 +68,14 @@ class DinoSAMClipPipeline:
         num_prompts: int = 10,
         attention_threshold: float = 0.5,
         min_mask_area: int = 1000,
-        confidence_threshold: float = 0.2
+        confidence_threshold: float = 0.2,
+        output_dir: str = OUTPUT_DIR
     ) -> Dict:
         """
         Main detection and classification method
+
+        Args:
+            output_dir: Directory to save debug images
         """
         classes = candidate_classes or self.candidate_classes
         image_array = np.array(image)
@@ -135,7 +142,7 @@ class DinoSAMClipPipeline:
                 masks=valid_masks,
                 points=prompts,
                 title="Pipeline Debug: SAM Valid Masks",
-                save_path=f"{OUTPUT_DIR}/debug_pipeline_sam.png" 
+                save_path=f"{output_dir}/debug_pipeline_sam.png" 
             )
 
         # 失败提前退出时，也要保证字典结构完整！
