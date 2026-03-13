@@ -199,9 +199,12 @@ def main():
     parser.add_argument("--num_prompts", type=int, default=10, help="Max number of prompts from DinoV2")
     parser.add_argument("--conf_thresh", type=float, default=0.15, help="CLIP confidence threshold to keep detection")
     parser.add_argument("--sam_checkpoint", type=str, default=ModelConfig.SAM_CHECKPOINT_PATH, help="Path to SAM checkpoint")
-    
+    parser.add_argument("--auto", action="store_true", help="使用纯 SAM 的自动网格模式，跳过 DinoV2")
     args = parser.parse_args()
 
+    
+  
+        
     # Load image
     if not os.path.exists(args.image):
         print(f"Error: Image {args.image} not found.")
@@ -217,12 +220,18 @@ def main():
 
     print("\n[Running Pipeline...]")
     # Run detection, pass command line arguments
-    results = pipeline.detect_and_classify(
-        image, 
-        num_prompts=args.num_prompts,
-        confidence_threshold=args.conf_thresh
-    )
-
+    if args.auto:
+            print("\n[启用 Auto 模式：无视 DinoV2，全图撒网扫描...]")
+            results = pipeline.detect_and_classify_automatic(
+                image, 
+                confidence_threshold=args.conf_thresh
+            )
+    else:
+            results = pipeline.detect_and_classify(
+                image, 
+                num_prompts=args.num_prompts,
+                confidence_threshold=args.conf_thresh
+            )
     print(f"Detection complete, found {results['num_objects']} targets.")
 
     # 1. Save intermediate state image (DinoV2 points and SAM raw masks)
