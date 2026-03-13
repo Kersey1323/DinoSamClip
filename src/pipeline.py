@@ -167,8 +167,8 @@ class DinoSAMClipPipeline:
         for i, mask_dict in enumerate(valid_masks):
             mask = mask_dict["mask"]
             cropped, bbox = self.sam.crop_masked_region(image_array, mask, padding=10)
-            cropped_masked = self.sam.apply_mask_to_image(cropped, mask[bbox[1]:bbox[3], bbox[0]:bbox[2]])
-            cropped_resized = cv2.resize(cropped_masked, (224, 224))
+            # cropped_masked = self.sam.apply_mask_to_image(cropped, mask[bbox[1]:bbox[3], bbox[0]:bbox[2]])
+            cropped_resized = cv2.resize(cropped, (224, 224))
 
             cropped_images.append(cropped_resized)
             mask_data.append({
