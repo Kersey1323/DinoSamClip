@@ -1,0 +1,33 @@
+# DinoV2 + SAM + CLIP Pipeline Requirements
+
+# Core Deep Learning Framework
+torch==2.8.0
+torchvision==0.23.0
+
+# Model Libraries
+transformers>=4.35.0
+segment-anything>=1.0
+pytorch-metric-learning  # For contrastive learning in VOC training
+
+# Image Processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Visualization
+matplotlib>=3.7.0
+scikit-learn>=1.3.0
+seaborn>=0.12.0  # For visualization plots
+pandas>=2.0.0    # For data analysis
+
+# Utilities
+tqdm>=4.65.0
+ipywidgets>=8.0.0  # For Jupyter notebooks (optional)
+requests>=2.31.0   # For downloading test images
+
+# For VOC dataset processing
+# xml.etree.ElementTree is part of Python standard library
+# shutil is part of Python standard library
+
+# Note: Some dependencies like seaborn and pandas are optional for basic usage
+# but required for advanced visualization and analysis in the fine-tuning scripts.
