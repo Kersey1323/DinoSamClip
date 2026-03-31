@@ -31,3 +31,8 @@ requests>=2.31.0   # For downloading test images
 
 # Note: Some dependencies like seaborn and pandas are optional for basic usage
 # but required for advanced visualization and analysis in the fine-tuning scripts.
+
+# API server
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
