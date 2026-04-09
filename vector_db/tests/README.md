@@ -1,6 +1,56 @@
-# SigLIP 检索测试
+# 向量检索测试
 
-测试 SigLIP 的图搜图和文搜图功能。
+测试 SigLIP 的图搜图和文搜图功能，DINOv2 的两阶段检索功能，以及 SigLIP + DINOv2 的混合检索功能。
+
+## 快速开始：使用 MilvusManager 统一接口
+
+推荐使用 `MilvusManager` 统一管理器进行检索测试，它集成了所有检索功能。
+
+### 1. 文本检索（仅 SigLIP）
+
+```bash
+python vector_db/tests/test_milvus_manager.py \
+    --mode text \
+    --query "特殊螺栓"
+```
+
+### 2. 图像检索
+
+**混合检索（默认，推荐）：**
+```bash
+python vector_db/tests/test_milvus_manager.py \
+    --mode image \
+    --query /path/to/query_image.jpg \
+    --image-mode hybrid
+```
+
+**SigLIP 单模型检索：**
+```bash
+python vector_db/tests/test_milvus_manager.py \
+    --mode image \
+    --query /path/to/query_image.jpg \
+    --image-mode siglip
+```
+
+**DINOv2 两阶段检索：**
+```bash
+python vector_db/tests/test_milvus_manager.py \
+    --mode image \
+    --query /path/to/query_image.jpg \
+    --image-mode dinov2
+```
+
+## 检索模式对比
+
+| 模式 | 优势 | 适用场景 |
+|------|------|----------|
+| **hybrid** | 融合 SigLIP 语义理解和 DINOv2 视觉细节，RRF 融合 + Patch 精排 | **推荐**：工业配件精确检索，需要识别微小规格差异 |
+| **siglip** | 速度快，语义理解能力强 | 快速检索，对精度要求不高的场景 |
+| **dinov2** | 视觉细节匹配精确，Patch-level 局部特征 | 需要精确匹配视觉细节的场景 |
+
+## 独立测试脚本
+
+以下是各个模型的独立测试脚本，用于详细测试和调试。
 
 ## 使用方法
 
@@ -86,9 +136,105 @@ Rank 2:
   ...
 ```
 
+## 混合检索测试（SigLIP + DINOv2）
+
+测试融合 SigLIP 和 DINOv2 的两阶段混合检索系统。
+
+### 使用方法
+
+```bash
+python vector_db/tests/test_hybrid_search.py \
+    --query /path/to/query_image.jpg \
+    --coarse-top-k 30 \
+    --fine-top-k 5 \
+    --alpha 0.6 \
+    --output-dir vector_db/tests/test_images/hybrid_search
+```
+
+**参数说明：**
+- `--query`: 查询图像路径
+- `--coarse-top-k`: 粗排返回候选数量（默认 30）
+- `--fine-top-k`: 精排返回结果数量（默认 5）
+- `--alpha`: 加权系数（默认 0.6），最终分数 = alpha × RRF分数 + (1-alpha) × Patch分数
+- `--output-dir`: 结果图像保存目录
+
+### 两阶段混合检索原理
+
+**阶段 1：RRF 融合粗排**
+- 同时使用 SigLIP 图像向量和 DINOv2 全局向量进行检索
+- 通过 RRF (Reciprocal Rank Fusion) 算法融合两个模型的检索结果
+- RRF 分数计算：score = Σ(1 / (k + rank))，其中 k=60
+- 输出融合后的 Top-K 候选集
+
+**阶段 2：Patch Token 精排**
+- 针对粗排候选集，加载 DINOv2 patch tokens（1369×1024）
+- 计算查询图像与候选图像的 patch-level 交叉匹配相似度矩阵
+- 使用最大相似度均值量化局部几何特征（螺纹、倒角等微观细节）
+- 加权合并 RRF 分数和 Patch 分数，输出最终排序
+
+### 输出说明
+
+脚本会生成两个目录：
+- `output-dir/coarse/`: RRF 融合粗排前 10 个结果
+- `output-dir/fine/`: Patch 精排 top-K 结果
+
+文件名格式：
+- 粗排：`rank{排名}_rrf{RRF分数}_{零件名称}.jpg`
+- 精排：`rank{排名}_final{最终分数}_{零件名称}.jpg`
+
+### 优势
+
+- **互补性**：SigLIP 擅长语义理解，DINOv2 擅长视觉细节
+- **鲁棒性**：RRF 融合降低单一模型的误判风险
+- **精确性**：Patch-level 匹配能识别工业配件的微小规格差异
+
+## DINOv2 两阶段检索测试
+
+测试 DINOv2 的粗排（全局特征）+ 精排（patch tokens）两阶段检索。
+
+### 使用方法
+
+```bash
+python vector_db/tests/test_dinov2_search.py \
+    --query /path/to/query_image.jpg \
+    --coarse-top-k 20 \
+    --fine-top-k 5 \
+    --output-dir vector_db/tests/test_images/dinov2_search
+```
+
+**参数说明：**
+- `--query`: 查询图像路径
+- `--coarse-top-k`: 粗排返回候选数量（默认 20）
+- `--fine-top-k`: 精排返回结果数量（默认 5）
+- `--output-dir`: 结果图像保存目录
+
+### 两阶段检索原理
+
+**阶段 1：粗排（Coarse Ranking）**
+- 使用全局特征向量（1024D）进行快速检索
+- 从整个数据库中筛选出 top-K 候选图像
+- 速度快，适合大规模初筛
+
+**阶段 2：精排（Fine Ranking）**
+- 加载候选图像的 patch tokens（1369×1024）
+- 计算查询图像与候选图像的 patch-level 相似度矩阵
+- 使用最大相似度的平均值作为精排分数
+- 精度高，适合精细匹配
+
+### 输出说明
+
+脚本会生成两个目录：
+- `output-dir/coarse/`: 粗排前 10 个结果
+- `output-dir/fine/`: 精排 top-K 结果
+
+文件名格式：
+- 粗排：`rank{排名}_dist{距离}_{零件名称}.jpg`
+- 精排：`rank{排名}_score{相似度}_{零件名称}.jpg`
+
 ## 注意事项
 
 - 确保 Milvus 服务正在运行
 - 确保已经运行过 `build_index.py` 建立索引
 - MinIO 凭证需要正确配置在 `vector_db/config/db_config.ini`
 - 相似度分数范围：COSINE 距离，越接近 1 表示越相似
+- DINOv2 测试需要 patch tokens 文件存在（由索引构建时生成）

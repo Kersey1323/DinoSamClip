@@ -9,3 +9,4 @@ __pycache__/
 vector_db/logs/
 vector_db/patch_tokens/
 *.npy
+vector_db/tests/test_images/*
