@@ -2,6 +2,7 @@
 数据库连接器
 """
 from typing import List, Dict, Optional
+from urllib.parse import quote_plus
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -31,7 +32,10 @@ class DatabaseConnector:
             user: 用户名
             password: 密码
         """
-        connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+        # URL 编码用户名和密码，处理特殊字符
+        encoded_user = quote_plus(user)
+        encoded_password = quote_plus(password)
+        connection_string = f"postgresql://{encoded_user}:{encoded_password}@{host}:{port}/{database}"
         self.engine = create_engine(connection_string, pool_pre_ping=True)
         self.SessionLocal = sessionmaker(bind=self.engine)
         logger.info(f"Database connection established: {host}:{port}/{database}")
