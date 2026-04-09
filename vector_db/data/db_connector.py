@@ -57,17 +57,17 @@ class DatabaseConnector:
         """
         session = self.SessionLocal()
         try:
-            # 构建查询
+            # 构建查询 - 使用实际的 schema 和表名
             query = """
                 SELECT
                     i.id as item_id,
                     i.item_name,
                     i.item_code,
-                    i.description,
+                    COALESCE(i.item_name, '') as description,
                     img.id as image_id,
                     img.image_url
-                FROM items i
-                LEFT JOIN sgo_item_images img ON i.id = img.item_id
+                FROM parts.item_info i
+                LEFT JOIN parts.sgo_item_image_info img ON i.id = img.item_id
                 WHERE img.image_url IS NOT NULL
             """
 

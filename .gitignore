@@ -1,2 +1,11 @@
 /weights/*
 /output/*
+/_pycache__/*
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+vector_db/logs/
+vector_db/patch_tokens/
+*.npy
