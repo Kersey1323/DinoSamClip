@@ -122,8 +122,8 @@ class VectorIndexer:
                     "image_id": image_id,
                     "image_url": image_url,
                     "description": description,
-                    "image_vector": image_vector.tolist(),
-                    "text_vector": text_vector.tolist(),
+                    "image_vector": image_vector.tolist() if hasattr(image_vector, 'tolist') else list(image_vector),
+                    "text_vector": text_vector.tolist() if hasattr(text_vector, 'tolist') else list(text_vector),
                     "created_at": created_at
                 }
                 siglip_records.append(siglip_record)
@@ -135,8 +135,8 @@ class VectorIndexer:
                     "item_code": item_code,
                     "image_id": image_id,
                     "image_url": image_url,
-                    "global_vector": global_vector.tolist(),
-                    "patch_tokens": patch_mean.tolist(),
+                    "global_vector": global_vector.tolist() if hasattr(global_vector, 'tolist') else list(global_vector),
+                    "patch_tokens": patch_mean.tolist() if hasattr(patch_mean, 'tolist') else list(patch_mean),
                     "patch_tokens_path": patch_tokens_path,
                     "created_at": created_at
                 }

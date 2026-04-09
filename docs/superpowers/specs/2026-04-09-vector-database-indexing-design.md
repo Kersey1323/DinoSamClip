@@ -527,17 +527,17 @@ log_dir = vector_db/logs
 
 ```ini
 [postgresql]
-host = localhost
+host = 192.168.100.2
 port = 5432
-database = recognition_db
-user = postgres
-password = your_password
+database = zcsf
+user = root
+password = Y2iaciej@bfr
 
 [minio]
-endpoint = localhost:9000
-access_key = minioadmin
-secret_key = minioadmin
-bucket = railway-parts
+endpoint = 192.168.100.2:9000
+access_key = root
+secret_key = Y2iaciej@bfr
+bucket = bfr-ai-files
 secure = false
 
 [local]

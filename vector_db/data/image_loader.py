@@ -134,6 +134,16 @@ class ImageLoader:
         Returns:
             PIL Image 对象
         """
+        # 如果路径包含 bucket 名称（如 bfr-ai-files/xxx），尝试从 MinIO 加载
+        if self.minio_client and '/' in file_path and not os.path.isabs(file_path):
+            # 检查是否是 bucket/object 格式
+            parts = file_path.split('/', 1)
+            if len(parts) == 2 and parts[0] == self.minio_bucket:
+                try:
+                    return self._load_from_minio(f"minio://{file_path}")
+                except Exception as e:
+                    logger.debug(f"Failed to load from MinIO, trying local: {e}")
+
         # 如果是相对路径且配置了 local_image_root，则拼接完整路径
         if not os.path.isabs(file_path) and self.local_image_root:
             file_path = os.path.join(self.local_image_root, file_path)

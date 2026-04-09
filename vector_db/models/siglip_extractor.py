@@ -47,10 +47,28 @@ class SigLIPExtractor:
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            image_features = self.model.get_image_features(**inputs)
+            outputs = self.model.get_image_features(**inputs)
+            # Handle both tensor and ModelOutput types
+            if isinstance(outputs, torch.Tensor):
+                image_features = outputs
+            else:
+                # For BaseModelOutputWithPooling, use pooler_output (CLS token)
+                if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+                    image_features = outputs.pooler_output
+                else:
+                    # Fallback: take CLS token from last_hidden_state
+                    image_features = outputs.last_hidden_state[:, 0]
 
-        # L2 归一化
-        features = image_features.cpu().numpy()[0]
+        # L2 归一化 - ensure we get 1D vector
+        features = image_features.cpu().numpy()
+        # Handle different output shapes
+        if features.ndim > 1:
+            if features.shape[0] == 1:
+                # Shape (1, dim) -> take first row
+                features = features[0]
+            else:
+                # Shape (batch, dim) -> take mean pooling to get single vector
+                features = features.mean(axis=0)
         features = features / np.linalg.norm(features)
 
         return features
@@ -69,10 +87,28 @@ class SigLIPExtractor:
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            text_features = self.model.get_text_features(**inputs)
+            outputs = self.model.get_text_features(**inputs)
+            # Handle both tensor and ModelOutput types
+            if isinstance(outputs, torch.Tensor):
+                text_features = outputs
+            else:
+                # For BaseModelOutputWithPooling, use pooler_output (CLS token)
+                if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+                    text_features = outputs.pooler_output
+                else:
+                    # Fallback: take CLS token from last_hidden_state
+                    text_features = outputs.last_hidden_state[:, 0]
 
-        # L2 归一化
-        features = text_features.cpu().numpy()[0]
+        # L2 归一化 - ensure we get 1D vector
+        features = text_features.cpu().numpy()
+        # Handle different output shapes
+        if features.ndim > 1:
+            if features.shape[0] == 1:
+                # Shape (1, dim) -> take first row
+                features = features[0]
+            else:
+                # Shape (batch, dim) -> take mean pooling
+                features = features.mean(axis=0)
         features = features / np.linalg.norm(features)
 
         return features
@@ -91,7 +127,13 @@ class SigLIPExtractor:
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            image_features = self.model.get_image_features(**inputs)
+            outputs = self.model.get_image_features(**inputs)
+            # Handle both tensor and ModelOutput types
+            if isinstance(outputs, torch.Tensor):
+                image_features = outputs
+            else:
+                # For BaseModelOutputWithPooling or similar
+                image_features = outputs[0] if hasattr(outputs, '__getitem__') else outputs.pooler_output
 
         # L2 归一化
         features = image_features.cpu().numpy()
