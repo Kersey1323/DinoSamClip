@@ -1,11 +1,18 @@
-# DinoSamClip: DINOv2 + SAM + CLIP 集成推理系统
+# DinoSamClip: DINOv2 + SAM + CLIP 集成推理系统 + 向量检索
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.8.0-red.svg)](https://pytorch.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-DinoSamClip 集成 **DINOv2**（自监督视觉特征提取）、**SAM**（Segment Anything，通用分割）和 **CLIP**（零样本分类）三大模型，实现端到端的物体检测、分割与分类，并提供 REST API 供后端调用。
+DinoSamClip 集成 **DINOv2**（自监督视觉特征提取）、**SAM**（Segment Anything，通用分割）、**CLIP**（零样本分类）和 **SigLIP**（图文检索）四大模型，实现端到端的物体检测、分割、分类与向量检索，并提供 REST API 供后端调用。
+
+## ✨ 新增功能
+
+- 🔍 **向量检索系统**：基于 SigLIP + DINOv2 的混合检索，支持图搜图和文搜图
+- 🎯 **SAM3 预处理**：入库前自动分割背景，提升检索精度
+- 📊 **Milvus 向量数据库**：高性能向量存储和检索
+- 🔄 **两阶段检索**：粗排（全局特征）+ 精排（Patch Token 匹配）
 
 ---
 
@@ -18,7 +25,34 @@ DinoSamClip/
 │   └── components/
 │       ├── dinov2_extractor.py  # DINOv2 特征提取 & 注意力图
 │       ├── sam_segmenter.py     # SAM 实例分割
-│       └── clip_classifier.py  # CLIP 零样本分类
+│       └── clip_classifier.py   # CLIP 零样本分类
+│
+├── vector_db/                   # 向量数据库系统 — 图像检索
+│   ├── models/                  # 特征提取模型
+│   │   ├── siglip_extractor.py  # SigLIP 图文特征提取
+│   │   ├── dinov2_extractor.py  # DINOv2 向量提取
+│   │   └── model_config.py      # 模型配置
+│   ├── preprocessing/           # 数据预处理
+│   │   └── sam3_preprocessor.py # SAM3 背景分割预处理
+│   ├── storage/                 # 向量存储
+│   │   ├── milvus_manager.py    # Milvus 统一管理器
+│   │   └── collection_manager.py # Collection 管理
+│   ├── indexing/                # 入库模块
+│   │   ├── indexer.py           # 向量入库器
+│   │   └── batch_indexer.py     # 批量入库
+│   ├── data/                    # 数据访问
+│   │   ├── db_connector.py      # PostgreSQL 连接
+│   │   └── image_loader.py      # MinIO/本地图像加载
+│   ├── scripts/                 # 脚本工具
+│   │   ├── build_index.py       # 批量建库脚本
+│   │   └── init_collections.py  # 初始化 Collection
+│   ├── tests/                   # 检索测试
+│   │   ├── test_siglip_search.py # SigLIP 检索测试
+│   │   └── test_dinov2_search.py # DINOv2 检索测试
+│   ├── config/                  # 配置文件
+│   │   ├── vector_db.ini        # 向量数据库配置
+│   │   └── db_config.ini        # 数据源配置
+│   └── README_SAM3.md           # SAM3 预处理文档
 │
 ├── server/                      # Web 层 — FastAPI REST 服务
 │   ├── main.py                  # 应用入口 + lifespan 单例加载
@@ -49,6 +83,139 @@ DinoSamClip/
 ├── requirements.txt             # 算法依赖
 ├── requirements-server.txt      # Web 服务追加依赖
 └── start_api.sh                 # 一键启动脚本
+```
+
+---
+
+## 🔍 向量检索系统
+
+### 快速开始
+
+#### 1. 初始化 Milvus Collection
+
+```bash
+python vector_db/scripts/init_collections.py
+```
+
+#### 2. 批量入库（支持 SAM3 预处理）
+
+```bash
+python vector_db/scripts/build_index.py \
+  --config vector_db/config/vector_db.ini \
+  --db-config vector_db/config/db_config.ini \
+  --limit 1000 \
+  --resume  # 支持断点续传
+```
+
+#### 3. 图像检索
+
+```bash
+# 图搜图
+python vector_db/tests/test_siglip_search.py \
+  --mode image \
+  --query path/to/query.jpg \
+  --top-k 10
+
+# 文搜图（基于 description）
+python vector_db/tests/test_siglip_search.py \
+  --mode text \
+  --query "左支座" \
+  --top-k 20
+
+# 文搜图（基于图像内容语义）
+python vector_db/tests/test_siglip_search.py \
+  --mode text \
+  --query "左支座" \
+  --top-k 20 \
+  --use-image-vector
+```
+
+### SAM3 预处理
+
+SAM3 预处理可在入库前自动分割物体并去除背景，提升检索精度。
+
+**配置** (`vector_db/config/vector_db.ini`):
+```ini
+[sam3]
+model_path = /path/to/sam3-video-base
+mask_dilate = 20
+bg_color = white
+device = cuda
+save_debug_images = true
+debug_output_dir = vector_db/logs/sam3_debug
+```
+
+**特性**:
+- ✅ 文本提示词引导分割（支持中文自动翻译）
+- ✅ Mask 膨胀、闭运算等形态学处理
+- ✅ 自动裁剪到边界框
+- ✅ 可配置背景颜色（white/black/gray）
+- ✅ 调试模式：保存原图/mask/结果
+
+**使用示例**:
+```python
+from vector_db.storage.milvus_manager import MilvusManager
+from PIL import Image
+
+# 启用 SAM3 预处理
+manager = MilvusManager(enable_sam3=True)
+
+# 入库（自动应用 SAM3 分割）
+image = Image.open('image.jpg')
+manager.index_image(
+    image=image,
+    item_id=12345,
+    item_name="左支座",
+    item_code="ABC123",
+    image_id=67890,
+    image_url="path/to/image.jpg"
+)
+
+# 检索（查询图像也会应用 SAM3 分割）
+results = manager.search_by_image(image, top_k=10, mode="hybrid")
+```
+
+详细文档：[vector_db/README_SAM3.md](vector_db/README_SAM3.md)
+
+### 检索模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|---------|
+| `siglip` | 仅使用 SigLIP 图像向量 | 快速检索，适合大规模数据 |
+| `dinov2` | DINOv2 两阶段检索（全局+Patch） | 高精度，适合细粒度匹配 |
+| `hybrid` | SigLIP + DINOv2 混合检索（RRF融合） | 平衡速度和精度（推荐） |
+
+### Python API
+
+```python
+from vector_db.storage.milvus_manager import MilvusManager
+from PIL import Image
+
+# 初始化管理器
+manager = MilvusManager(
+    config_path='vector_db/config/vector_db.ini',
+    db_config_path='vector_db/config/db_config.ini',
+    enable_sam3=True  # 启用 SAM3 预处理
+)
+
+# 文本检索
+results = manager.search_by_text("左支座", top_k=10)
+
+# 图像检索
+query_image = Image.open("query.jpg")
+results = manager.search_by_image(
+    image=query_image,
+    top_k=10,
+    mode="hybrid",      # siglip/dinov2/hybrid
+    coarse_top_k=30,    # 粗排候选数
+    alpha=0.6           # 加权系数
+)
+
+# 处理结果
+for result in results:
+    print(f"Item: {result['entity']['item_name']}")
+    print(f"Score: {result['distance']:.4f}")
+    print(f"Image: {result['entity']['image_url']}")
 ```
 
 ---
@@ -231,9 +398,20 @@ python training/voc/train_voc.py
 
 - [DINOv2](https://github.com/facebookresearch/dinov2) — Facebook Research
 - [Segment Anything](https://github.com/facebookresearch/segment-anything) — Meta AI
+- [SAM3](https://github.com/facebookresearch/sam3) — Meta AI
 - [CLIP](https://github.com/openai/CLIP) — OpenAI
+- [SigLIP](https://github.com/google-research/big_vision) — Google Research
 - [Transformers](https://github.com/huggingface/transformers) — Hugging Face
+- [Milvus](https://milvus.io/) — Vector Database
 - [FastAPI](https://fastapi.tiangolo.com/)
+
+---
+
+## 📚 相关文档
+
+- [SAM3 预处理使用指南](vector_db/README_SAM3.md)
+- [向量数据库设计文档](docs/superpowers/specs/2026-04-09-vector-database-indexing-design.md)
+- [向量数据库实现计划](docs/superpowers/specs/2026-04-09-vector-database-indexing-plan.md)
 
 ---
 
