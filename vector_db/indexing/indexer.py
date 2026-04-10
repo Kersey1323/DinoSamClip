@@ -3,12 +3,13 @@
 """
 import os
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from vector_db.models.siglip_extractor import SigLIPExtractor
 from vector_db.models.dinov2_extractor import DINOv2VectorExtractor
 from vector_db.storage.collection_manager import CollectionManager
 from vector_db.data.image_loader import ImageLoader
+from vector_db.preprocessing.sam3_preprocessor import SAM3Preprocessor
 from vector_db.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -25,7 +26,8 @@ class VectorIndexer:
         image_loader: ImageLoader,
         siglip_collection_name: str,
         dinov2_collection_name: str,
-        patch_tokens_dir: str
+        patch_tokens_dir: str,
+        sam3_preprocessor: Optional[SAM3Preprocessor] = None
     ):
         """
         初始化向量入库器
@@ -38,6 +40,7 @@ class VectorIndexer:
             siglip_collection_name: SigLIP Collection 名称
             dinov2_collection_name: DINOv2 Collection 名称
             patch_tokens_dir: Patch Tokens 存储目录
+            sam3_preprocessor: SAM3 预处理器（可选）
         """
         self.siglip_extractor = siglip_extractor
         self.dinov2_extractor = dinov2_extractor
@@ -46,6 +49,7 @@ class VectorIndexer:
         self.siglip_collection_name = siglip_collection_name
         self.dinov2_collection_name = dinov2_collection_name
         self.patch_tokens_dir = patch_tokens_dir
+        self.sam3_preprocessor = sam3_preprocessor
 
         # 创建 patch tokens 目录
         os.makedirs(patch_tokens_dir, exist_ok=True)
@@ -99,6 +103,15 @@ class VectorIndexer:
                     logger.warning(f"Failed to load image {image_id}: {image_url}")
                     failed_image_ids.append(image_id)
                     continue
+
+                # SAM3 预处理
+                if self.sam3_preprocessor is not None:
+                    processed_image = self.sam3_preprocessor.preprocess_image(image, item_name, image_id)
+                    if processed_image is not None:
+                        image = processed_image
+                        logger.debug(f"SAM3 preprocessing applied for image {image_id}")
+                    else:
+                        logger.warning(f"SAM3 preprocessing failed for {image_id}, using original image")
 
                 # 提取 SigLIP 图像特征
                 image_vector = self.siglip_extractor.extract_image_features(image)

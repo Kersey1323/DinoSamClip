@@ -18,6 +18,7 @@ from vector_db.data.db_connector import DatabaseConnector
 from vector_db.data.image_loader import ImageLoader
 from vector_db.indexing.indexer import VectorIndexer
 from vector_db.indexing.batch_indexer import BatchIndexer
+from vector_db.preprocessing.sam3_preprocessor import SAM3Preprocessor
 from vector_db.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -86,6 +87,19 @@ def main():
         device=dinov2_config.device
     )
 
+    # 初始化 SAM3 预处理器
+    sam3_preprocessor = None
+    config_parser = ConfigParser()
+    config_parser.read(args.config, encoding='utf-8')
+    if config_parser.has_section('sam3'):
+        logger.info("Initializing SAM3 preprocessor...")
+        sam3_preprocessor = SAM3Preprocessor(
+            model_path=config_parser.get('sam3', 'model_path'),
+            mask_dilate=config_parser.getint('sam3', 'mask_dilate'),
+            bg_color=config_parser.get('sam3', 'bg_color'),
+            device=config_parser.get('sam3', 'device')
+        )
+
     # 初始化存储层
     logger.info("Initializing storage...")
     collection_manager = CollectionManager(
@@ -121,7 +135,8 @@ def main():
         image_loader=image_loader,
         siglip_collection_name=siglip_config.collection_name,
         dinov2_collection_name=dinov2_config.collection_name,
-        patch_tokens_dir=dinov2_config.patch_tokens_dir
+        patch_tokens_dir=dinov2_config.patch_tokens_dir,
+        sam3_preprocessor=sam3_preprocessor
     )
 
     # 加载检查点配置

@@ -89,13 +89,16 @@ class SigLIPSearchTester:
 
         return results[0]
 
-    def search_by_text(self, text: str, top_k: int = 5):
+    def search_by_text(self, text: str, top_k: int = 5, use_image_vector: bool = False):
         """
         文搜图
 
         Args:
             text: 查询文本
             top_k: 返回前 K 个结果
+            use_image_vector: 是否使用 image_vector 字段（基于图像内容的语义相似度）
+                            False: 使用 text_vector（基于 description 文本匹配）
+                            True: 使用 image_vector（基于图像内容，适合 SAM3 分割后的图像）
 
         Returns:
             检索结果列表
@@ -105,11 +108,15 @@ class SigLIPSearchTester:
         # 提取文本特征
         query_vector = self.siglip_extractor.extract_text_features(text)
 
+        # 选择搜索字段
+        anns_field = "image_vector" if use_image_vector else "text_vector"
+        logger.info(f"Using vector field: {anns_field}")
+
         # 在 Milvus 中检索
         results = self.collection_manager.client.search(
             collection_name=self.collection_name,
             data=[query_vector.tolist()],
-            anns_field="text_vector",
+            anns_field=anns_field,
             limit=top_k,
             output_fields=["item_id", "item_name", "item_code", "image_id", "image_url"]
         )
@@ -185,6 +192,8 @@ def main():
                         help='Number of results to return')
     parser.add_argument('--output-dir', type=str, default='vector_db/tests/test_images',
                         help='Directory to save result images')
+    parser.add_argument('--use-image-vector', action='store_true',
+                        help='Use image_vector field for text search (semantic similarity based on image content)')
     args = parser.parse_args()
 
     # 初始化测试器
@@ -194,7 +203,7 @@ def main():
     if args.mode == 'image':
         results = tester.search_by_image(args.query, top_k=args.top_k)
     else:
-        results = tester.search_by_text(args.query, top_k=args.top_k)
+        results = tester.search_by_text(args.query, top_k=args.top_k, use_image_vector=args.use_image_vector)
 
     # 打印结果
     tester.print_results(results)

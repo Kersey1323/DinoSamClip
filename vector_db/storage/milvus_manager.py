@@ -13,6 +13,7 @@ from vector_db.models.dinov2_extractor import DINOv2VectorExtractor
 from vector_db.models.model_config import SigLIPConfig, DINOv2Config, MilvusConfig
 from vector_db.storage.collection_manager import CollectionManager
 from vector_db.data.image_loader import ImageLoader
+from vector_db.preprocessing.sam3_preprocessor import SAM3Preprocessor
 from vector_db.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -24,7 +25,8 @@ class MilvusManager:
     def __init__(
         self,
         config_path: str = 'vector_db/config/vector_db.ini',
-        db_config_path: str = 'vector_db/config/db_config.ini'
+        db_config_path: str = 'vector_db/config/db_config.ini',
+        enable_sam3: bool = False
     ):
         """
         初始化 Milvus 管理器
@@ -32,6 +34,7 @@ class MilvusManager:
         Args:
             config_path: 向量数据库配置文件路径
             db_config_path: 数据库连接配置文件路径
+            enable_sam3: 是否启用 SAM3 预处理
         """
         logger.info("Initializing Milvus Manager...")
 
@@ -54,6 +57,25 @@ class MilvusManager:
         )
         self.dinov2_collection = dinov2_config.collection_name
         self.patch_tokens_dir = dinov2_config.patch_tokens_dir
+
+        # 初始化 SAM3 预处理器（可选）
+        self.sam3_preprocessor = None
+        if enable_sam3:
+            config_parser = ConfigParser()
+            config_parser.read(config_path, encoding='utf-8')
+            if config_parser.has_section('sam3'):
+                logger.info("Initializing SAM3 preprocessor...")
+                self.sam3_preprocessor = SAM3Preprocessor(
+                    model_path=config_parser.get('sam3', 'model_path'),
+                    mask_dilate=config_parser.getint('sam3', 'mask_dilate'),
+                    bg_color=config_parser.get('sam3', 'bg_color'),
+                    device=config_parser.get('sam3', 'device'),
+                    save_debug_images=config_parser.getboolean('sam3', 'save_debug_images', fallback=False),
+                    debug_output_dir=config_parser.get('sam3', 'debug_output_dir', fallback='vector_db/logs/sam3_debug')
+                )
+                logger.info("SAM3 preprocessor initialized")
+            else:
+                logger.warning("SAM3 section not found in config, SAM3 preprocessing disabled")
 
         # 初始化 Milvus Collection 管理器
         self.collection_manager = CollectionManager(
@@ -115,9 +137,22 @@ class MilvusManager:
         siglip_success = False
         dinov2_success = False
 
+        # SAM3 预处理（如果启用）
+        processed_image = image
+        if self.sam3_preprocessor is not None:
+            try:
+                preprocessed = self.sam3_preprocessor.preprocess_image(image, item_name, image_id)
+                if preprocessed is not None:
+                    processed_image = preprocessed
+                    logger.debug(f"SAM3 preprocessing applied for image {image_id}")
+                else:
+                    logger.warning(f"SAM3 preprocessing failed for {image_id}, using original image")
+            except Exception as e:
+                logger.error(f"SAM3 preprocessing error for {image_id}: {e}")
+
         # SigLIP 索引
         try:
-            image_vector = self.siglip_extractor.extract_image_features(image)
+            image_vector = self.siglip_extractor.extract_image_features(processed_image)
             text_vector = self.siglip_extractor.extract_text_features(description or item_name)
 
             siglip_record = {
@@ -143,8 +178,8 @@ class MilvusManager:
 
         # DINOv2 索引
         try:
-            global_vector = self.dinov2_extractor.extract_global_vector(image)
-            patch_tokens = self.dinov2_extractor.extract_patch_tokens(image)
+            global_vector = self.dinov2_extractor.extract_global_vector(processed_image)
+            patch_tokens = self.dinov2_extractor.extract_patch_tokens(processed_image)
             patch_mean = np.mean(patch_tokens, axis=0)
 
             # 保存 patch tokens
@@ -251,8 +286,20 @@ class MilvusManager:
         """SigLIP 图像检索"""
         logger.info(f"Image search with SigLIP (top-{top_k})")
 
+        # SAM3 预处理查询图像（如果启用）
+        processed_image = image
+        if self.sam3_preprocessor is not None:
+            try:
+                # 对查询图像不保存调试图像，使用通用名称
+                preprocessed = self.sam3_preprocessor.preprocess_image(image, "query_object", None)
+                if preprocessed is not None:
+                    processed_image = preprocessed
+                    logger.debug("SAM3 preprocessing applied to query image")
+            except Exception as e:
+                logger.warning(f"SAM3 preprocessing failed for query image: {e}")
+
         # 提取图像特征
-        image_vector = self.siglip_extractor.extract_image_features(image)
+        image_vector = self.siglip_extractor.extract_image_features(processed_image)
 
         # 在 Milvus 中检索
         results = self.collection_manager.client.search(
@@ -274,9 +321,20 @@ class MilvusManager:
         """DINOv2 两阶段图像检索"""
         logger.info(f"Image search with DINOv2 two-stage (coarse: {coarse_top_k}, fine: {fine_top_k})")
 
+        # SAM3 预处理查询图像（如果启用）
+        processed_image = image
+        if self.sam3_preprocessor is not None:
+            try:
+                preprocessed = self.sam3_preprocessor.preprocess_image(image, "query_object", None)
+                if preprocessed is not None:
+                    processed_image = preprocessed
+                    logger.debug("SAM3 preprocessing applied to query image")
+            except Exception as e:
+                logger.warning(f"SAM3 preprocessing failed for query image: {e}")
+
         # 提取查询图像特征
-        query_global = self.dinov2_extractor.extract_global_vector(image)
-        query_patch_tokens = self.dinov2_extractor.extract_patch_tokens(image)
+        query_global = self.dinov2_extractor.extract_global_vector(processed_image)
+        query_patch_tokens = self.dinov2_extractor.extract_patch_tokens(processed_image)
 
         # 阶段1: 粗排
         logger.info("  Stage 1: Coarse ranking...")
@@ -329,10 +387,21 @@ class MilvusManager:
         """混合图像检索（SigLIP + DINOv2 RRF 融合 + Patch 精排）"""
         logger.info(f"Image search with hybrid mode (coarse: {coarse_top_k}, fine: {fine_top_k}, alpha: {alpha})")
 
+        # SAM3 预处理查询图像（如果启用）
+        processed_image = image
+        if self.sam3_preprocessor is not None:
+            try:
+                preprocessed = self.sam3_preprocessor.preprocess_image(image, "query_object", None)
+                if preprocessed is not None:
+                    processed_image = preprocessed
+                    logger.debug("SAM3 preprocessing applied to query image")
+            except Exception as e:
+                logger.warning(f"SAM3 preprocessing failed for query image: {e}")
+
         # 提取查询图像特征
-        siglip_vector = self.siglip_extractor.extract_image_features(image)
-        dinov2_global = self.dinov2_extractor.extract_global_vector(image)
-        query_patch_tokens = self.dinov2_extractor.extract_patch_tokens(image)
+        siglip_vector = self.siglip_extractor.extract_image_features(processed_image)
+        dinov2_global = self.dinov2_extractor.extract_global_vector(processed_image)
+        query_patch_tokens = self.dinov2_extractor.extract_patch_tokens(processed_image)
 
         # 阶段1: RRF 融合粗排
         logger.info("  Stage 1: RRF fusion...")
